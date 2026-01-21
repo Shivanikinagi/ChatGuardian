@@ -1,0 +1,75 @@
+version: '3.8'
+
+services:
+  # PostgreSQL Database
+  postgres:
+    image: postgres:15-alpine
+    container_name: chatguardian-db
+    environment:
+      POSTGRES_USER: chatguardian
+      POSTGRES_PASSWORD: password
+      POSTGRES_DB: chatguardian
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    networks:
+      - chatguardian-network
+
+  # Redis Cache & Queue
+  redis:
+    image: redis:7-alpine
+    container_name: chatguardian-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    networks:
+      - chatguardian-network
+
+  # FastAPI Backend
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: chatguardian-backend
+    environment:
+      - DATABASE_URL=postgresql+asyncpg://chatguardian:password@postgres:5432/chatguardian
+      - REDIS_URL=redis://redis:6379/0
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./backend:/app
+      - ai_models:/app/models
+    depends_on:
+      - postgres
+      - redis
+    networks:
+      - chatguardian-network
+    command: uvicorn main:app --host 0.0.0.0 --port 8000 --reload
+
+  # Celery Worker (for background tasks)
+  celery-worker:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: chatguardian-celery
+    environment:
+      - DATABASE_URL=postgresql+asyncpg://chatguardian:password@postgres:5432/chatguardian
+      - REDIS_URL=redis://redis:6379/0
+      - CELERY_BROKER_URL=redis://redis:6379/1
+    depends_on:
+      - postgres
+      - redis
+    networks:
+      - chatguardian-network
+    command: celery -A app.tasks worker --loglevel=info
+
+volumes:
+  postgres_data:
+  redis_data:
+  ai_models:
+
+networks:
+  chatguardian-network:
+    driver: bridge
